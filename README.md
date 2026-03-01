@@ -20,7 +20,7 @@ Para evitar alertas causadas por la suspensión de procesos en Android (ahorro d
 ### Instalación en el Dispositivo
 1. **Dependencias**:
    ```bash
-   pkg update && pkg install curl -y
+   pkg update && pkg install curl iproute2 dos2unix -y
    ```
 2. **Configuración**:
    Crea un archivo `.env` en este directorio con:
@@ -36,6 +36,13 @@ Para evitar alertas causadas por la suspensión de procesos en Android (ahorro d
 
 ### Archivos de Registro
 - Log local en `~/monitor.log`.
+
+### Consideraciones (Windows/Termux)
+> [!WARNING]
+> Si editas o creas los archivos `.env` o `monitor.sh` desde un entorno Windows, saltarán errores por el uso de saltos de línea CRLF (`\r\n`). Al transferir al dispositivo Android (Termux), ejecuta:
+> ```bash
+> dos2unix .env monitor.sh
+> ```
 
 ## Licencia
 Distribuido bajo la Licencia MIT. Ver `LICENSE` para más información.

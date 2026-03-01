@@ -28,10 +28,12 @@ DEVICE_NAME="${DEVICE_ALIAS:-"Android Device"}"
 # --- FUNCIONES ---
 
 get_gateway_ip() {
+    export PATH="/data/data/com.termux/files/usr/bin:/system/bin:$PATH"
+    
     # Intentar obtener la IP del router dinámicamente
     # 1. Intentar ip route
     # 2. Reintentar con getprop si falla (específico de Android)
-    local gw=$(ip route show | grep default | awk '/default/ {print $3}' | head -n 1)
+    local gw=$(ip route show 2>/dev/null | grep default | awk '/default/ {print $3}' | head -n 1)
     if [ -z "$gw" ]; then
         gw=$(getprop dhcp.wlan0.gateway 2>/dev/null)
     fi
