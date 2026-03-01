@@ -27,6 +27,17 @@ DEVICE_NAME="${DEVICE_ALIAS:-"Android Device"}"
 
 # --- FUNCIONES ---
 
+get_gateway_ip() {
+    # Intentar obtener la IP del router dinámicamente
+    # 1. Intentar ip route
+    # 2. Reintentar con getprop si falla (específico de Android)
+    local gw=$(ip route show | grep default | awk '/default/ {print $3}' | head -n 1)
+    if [ -z "$gw" ]; then
+        gw=$(getprop dhcp.wlan0.gateway 2>/dev/null)
+    fi
+    echo "$gw"
+}
+
 log_message() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"
 }
@@ -39,6 +50,7 @@ send_telegram_notification() {
     while [ "$sent" = false ]; do
         response=$(curl -s -X POST "https://api.telegram.org/bot$TELEGRAM_TOKEN/sendMessage" \
             -d "chat_id=$CHAT_ID" \
+            -d "parse_mode=Markdown" \
             -d "text=$message")
             
         if [[ "$response" == *"\"ok\":true"* ]]; then
@@ -57,16 +69,19 @@ log_message "Iniciando monitoreo de conectividad de internet (Umbral: 15 min)...
 # Host confiable para verificar internet (Cloudflare DNS)
 CHECK_HOST="1.1.1.1"
 THRESHOLD_SECONDS=900 # 15 minutos
-MIN_FAILED_CHECKS=10  # Mínimo de chequeos fallidos reales para disparar alerta (evita fallos por suspensión de proceso)
+MIN_FAILED_CHECKS=10  # Mínimo de chequeos fallidos reales para disparar alerta
 
 INTERNET_WAS_DOWN=false
 DOWN_START_TIME=0
 FAILED_CHECKS_COUNT=0
 ALERT_PENDING=false
+LIKELY_CAUSE="Desconocida"
 
 while true; do
-    # Intentar ping de 3 paquetes para mayor robustez ante ruidos de red
-    if ping -c 3 -i 0.5 -W 2 $CHECK_HOST > /dev/null 2>&1; then
+    GATEWAY_IP=$(get_gateway_ip)
+    
+    # Comprobar internet (Mundo exterior)
+    if ping -c 1 -W 2 $CHECK_HOST > /dev/null 2>&1; then
         if [ "$INTERNET_WAS_DOWN" = true ]; then
             log_message "¡Internet ha vuelto!"
             
@@ -75,18 +90,28 @@ while true; do
                 DURATION_SECONDS=$((CURRENT_TIME - DOWN_START_TIME))
                 DURATION_MIN=$((DURATION_SECONDS / 60))
                 
-                log_message "El corte superó los 15 min y tuvo $FAILED_CHECKS_COUNT chequeos fallidos. Enviando notificación..."
-                send_telegram_notification "🌐 *AVISO DE CONECTIVIDAD:* El internet ha retornado en *$DEVICE_NAME* tras una caída detectada de aprox. ${DURATION_MIN} minutos (Chequeos fallidos: $FAILED_CHECKS_COUNT)."
+                log_message "El corte finalizó. Causa probable: $LIKELY_CAUSE. Duración: ${DURATION_MIN} min."
+                
+                EMOJI="🌐"
+                [ "$LIKELY_CAUSE" == "Corte de Luz (Router Down)" ] && EMOJI="🔌"
+                
+                send_telegram_notification "$EMOJI *AVISO DE CONECTIVIDAD:* El internet ha retornado en *$DEVICE_NAME*.
+                
+*Causa probable:* $LIKELY_CAUSE
+*Duración:* aprox. ${DURATION_MIN} minutos
+*Chequeos fallidos:* $FAILED_CHECKS_COUNT"
             else
-                log_message "Corte breve o sospecha de suspensión detectada ($FAILED_CHECKS_COUNT chequeos). No se requiere notificación."
+                log_message "Corte breve detectado. No se requiere notificación."
             fi
             
             INTERNET_WAS_DOWN=false
             ALERT_PENDING=false
             DOWN_START_TIME=0
             FAILED_CHECKS_COUNT=0
+            LIKELY_CAUSE="Desconocida"
         fi
     else
+        # Internet está caído
         if [ "$INTERNET_WAS_DOWN" = false ]; then
             log_message "Se ha detectado una caída de internet."
             INTERNET_WAS_DOWN=true
@@ -94,18 +119,31 @@ while true; do
             FAILED_CHECKS_COUNT=1
         else
             FAILED_CHECKS_COUNT=$((FAILED_CHECKS_COUNT + 1))
-            
-            # Verificar si ya superamos el umbral de tiempo Y el umbral de chequeos reales
-            CURRENT_TIME=$(date +%s)
-            ELAPSED=$((CURRENT_TIME - DOWN_START_TIME))
-            
-            if [ "$ALERT_PENDING" = false ] && [ $ELAPSED -ge $THRESHOLD_SECONDS ] && [ $FAILED_CHECKS_COUNT -ge $MIN_FAILED_CHECKS ]; then
-                log_message "La caída ha superado los 15 minutos y 10 chequeos. Se enviará alerta al retornar."
-                ALERT_PENDING=true
+        fi
+
+        # Diagnosticar causa usando el Gateway
+        if [ -n "$GATEWAY_IP" ]; then
+            if ping -c 1 -W 1 "$GATEWAY_IP" > /dev/null 2>&1; then
+                # El router responde pero 1.1.1.1 no
+                LIKELY_CAUSE="Falla del Proveedor (ISP)"
+            else
+                # Ni el router responde
+                LIKELY_CAUSE="Corte de Luz (Router Down)"
             fi
+        else
+            LIKELY_CAUSE="Fallo de Conexión Local (Gateway no hallado)"
+        fi
+
+        # Verificar umbral para activar alerta pendiente
+        CURRENT_TIME=$(date +%s)
+        ELAPSED=$((CURRENT_TIME - DOWN_START_TIME))
+        
+        if [ "$ALERT_PENDING" = false ] && [ $ELAPSED -ge $THRESHOLD_SECONDS ] && [ $FAILED_CHECKS_COUNT -ge $MIN_FAILED_CHECKS ]; then
+            log_message "Umbral alcanzado. Causa actual: $LIKELY_CAUSE. Alerta preparada para el retorno."
+            ALERT_PENDING=true
         fi
     fi
 
-    # Esperar 60 segundos antes de la siguiente comprobación
     sleep 60
 done
+
