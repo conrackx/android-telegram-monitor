@@ -89,23 +89,26 @@ telegram_polling() {
     # Guardar offset persistente
     echo "$offset" > "$OFFSET_FILE" 2>/dev/null
 
-    # Revisar comandos entrantes
-    echo "$updates" | grep -o '"message":{[^}]*}' | while IFS= read -r msg; do
-        chat_id=$(echo "$msg" | grep -o '"chat":{"id":[-0-9]*' | grep -o '[-0-9]*$')
-        text=$(echo "$msg" | grep -o '"text":"[^"]*"' | sed 's/"text":"//;s/"$//')
-
-        [ "$chat_id" = "$CHAT_ID" ] || continue
-
-        case "$text" in
-            /status)
-                if is_running; then
-                    send_telegram "$CHAT_ID" "✅ El monitor está corriendo en *$DEVICE_NAME*."
-                else
-                    send_telegram "$CHAT_ID" "❌ El monitor *no* está corriendo en *$DEVICE_NAME*."
-                fi
-                ;;
-        esac
+    # Procesar cada update: encontrar el update_id más alto
+    local new_offset=0
+    echo "$updates" | grep -o '"update_id":[0-9]*' | while read -r line; do
+        update_id="${line#*:}"
+        [ "$update_id" -gt "$new_offset" ] && new_offset="$update_id"
     done
+
+    # Guardar offset persistente (solo si hay updates nuevos)
+    [ "$new_offset" -gt 0 ] && echo "$new_offset" > "$OFFSET_FILE" 2>/dev/null
+
+    # Revisar comandos /status de nuestro CHAT_ID en el lote de updates
+    if echo "$updates" | grep -q '"chat":{"id":'"$CHAT_ID"''; then
+        if echo "$updates" | grep -q '"/status"'; then
+            if is_running; then
+                send_telegram "$CHAT_ID" "✅ El monitor está corriendo en *$DEVICE_NAME*."
+            else
+                send_telegram "$CHAT_ID" "❌ El monitor *no* está corriendo en *$DEVICE_NAME*."
+            fi
+        fi
+    fi
 }
 
 # FIX: Validación de 2/3 pings en lugar de un único ping
