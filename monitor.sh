@@ -80,24 +80,10 @@ telegram_polling() {
     updates=$(curl -s --max-time 5 "$TELEGRAM_API/getUpdates?offset=$((offset + 1))&limit=5&timeout=2")
     [ -n "$updates" ] || return 0
 
-    # Procesar cada update devolviendo el offset más alto visto
-    echo "$updates" | grep -o '"update_id":[0-9]*' | while read -r line; do
-        update_id="${line#*:}"
-        [ "$update_id" -gt "$offset" ] && offset="$update_id"
-    done
-
-    # Guardar offset persistente
-    echo "$offset" > "$OFFSET_FILE" 2>/dev/null
-
-    # Procesar cada update: encontrar el update_id más alto
-    local new_offset=0
-    echo "$updates" | grep -o '"update_id":[0-9]*' | while read -r line; do
-        update_id="${line#*:}"
-        [ "$update_id" -gt "$new_offset" ] && new_offset="$update_id"
-    done
-
-    # Guardar offset persistente (solo si hay updates nuevos)
-    [ "$new_offset" -gt 0 ] && echo "$new_offset" > "$OFFSET_FILE" 2>/dev/null
+    # Guardar offset persistente: último update_id visto (Opción B, sin subshell)
+    local last_update_id
+    last_update_id=$(echo "$updates" | grep -o '"update_id":[0-9]*' | grep -o '[0-9]*$' | sort -n | tail -1)
+    [ -n "$last_update_id" ] && echo "$last_update_id" > "$OFFSET_FILE" 2>/dev/null
 
     # Revisar comandos /status de nuestro CHAT_ID en el lote de updates
     if echo "$updates" | grep -q '"chat":{"id":'"$CHAT_ID"''; then
