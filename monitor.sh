@@ -17,7 +17,7 @@ fi
 LOG_FILE="$HOME/monitor.log"
 PIDFILE="$HOME/.monitor.pid"
 TELEGRAM_API="https://api.telegram.org/bot$TELEGRAM_TOKEN"
-OFFSET_FILE="/tmp/monitor_tg_offset_${CHAT_ID}"
+OFFSET_FILE="$HOME/.monitor_tg_offset_${CHAT_ID}"
 
 if [ -z "$TELEGRAM_TOKEN" ] || [ -z "$CHAT_ID" ]; then
     echo "Error: TELEGRAM_TOKEN o CHAT_ID no están definidos en el archivo .env"
