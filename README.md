@@ -21,6 +21,14 @@ Para evitar alertas causadas por la suspensión de procesos en Android (ahorro d
 5. **Reintentos en API de Telegram**: Bucle de 10 reintentos para asegurar el envío del mensaje incluso si el Wi-Fi demora un poco más en reconectar totalmente.
 6. **Notificación Inteligente**: Al retornar la conexión, envía un reporte indicando **Causa Probable**, **Duración** y conteo de fallos reales acumulados.
 
+### Comandos remotos por Telegram
+
+El bot acepta comandos del `CHAT_ID` configurado en `.env`:
+
+| Comando | Descripción |
+|---------|-------------|
+| `/status` | Responde si el proceso del monitor está corriendo en el dispositivo. |
+
 ### Instalación en el Dispositivo
 1. **Dependencias**:
    ```bash

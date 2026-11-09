@@ -15,6 +15,9 @@ if [ -f "$(dirname "$0")/.env" ]; then
 fi
 
 LOG_FILE="$HOME/monitor.log"
+PIDFILE="$HOME/.monitor.pid"
+TELEGRAM_API="https://api.telegram.org/bot$TELEGRAM_TOKEN"
+OFFSET_FILE="/tmp/monitor_tg_offset_${CHAT_ID}"
 
 if [ -z "$TELEGRAM_TOKEN" ] || [ -z "$CHAT_ID" ]; then
     echo "Error: TELEGRAM_TOKEN o CHAT_ID no están definidos en el archivo .env"
@@ -33,6 +36,10 @@ else
     echo "$(date '+%Y-%m-%d %H:%M:%S') - ADVERTENCIA: termux-wake-lock no disponible. Android puede suspender el proceso." >> "$LOG_FILE"
 fi
 
+# Registrar PID para permitir consultas remotas de estado
+trap 'rm -f "$PIDFILE"' EXIT
+echo $$ > "$PIDFILE"
+
 # --- FUNCIONES ---
 
 get_gateway_ip() {
@@ -49,6 +56,58 @@ log_message() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"
 }
 
+# Verifica si el proceso del monitor está vivo leyendo su PIDFILE
+is_running() {
+    local pid
+    [ -f "$PIDFILE" ] || return 1
+    pid=$(cat "$PIDFILE" 2>/dev/null)
+    [ -n "$pid" ] || return 1
+    kill -0 "$pid" 2>/dev/null
+}
+
+# Polling de Telegram: escucha comandos del CHAT_ID configurado.
+# Comandos soportados: /status (responde si el proceso está corriendo).
+telegram_polling() {
+    local offset=0
+    local updates
+    local update_id
+    local chat_id
+    local text
+
+    [ -f "$OFFSET_FILE" ] && offset=$(cat "$OFFSET_FILE" 2>/dev/null)
+    [ -n "$offset" ] || offset=0
+
+    updates=$(curl -s --max-time 5 "$TELEGRAM_API/getUpdates?offset=$((offset + 1))&limit=5&timeout=2")
+    [ -n "$updates" ] || return 0
+
+    # Procesar cada update devolviendo el offset más alto visto
+    echo "$updates" | grep -o '"update_id":[0-9]*' | while read -r line; do
+        update_id="${line#*:}"
+        [ "$update_id" -gt "$offset" ] && offset="$update_id"
+    done
+
+    # Guardar offset persistente
+    echo "$offset" > "$OFFSET_FILE" 2>/dev/null
+
+    # Revisar comandos entrantes
+    echo "$updates" | grep -o '"message":{[^}]*}' | while IFS= read -r msg; do
+        chat_id=$(echo "$msg" | grep -o '"chat":{"id":[-0-9]*' | grep -o '[-0-9]*$')
+        text=$(echo "$msg" | grep -o '"text":"[^"]*"' | sed 's/"text":"//;s/"$//')
+
+        [ "$chat_id" = "$CHAT_ID" ] || continue
+
+        case "$text" in
+            /status)
+                if is_running; then
+                    send_telegram "$CHAT_ID" "✅ El monitor está corriendo en *$DEVICE_NAME*."
+                else
+                    send_telegram "$CHAT_ID" "❌ El monitor *no* está corriendo en *$DEVICE_NAME*."
+                fi
+                ;;
+        esac
+    done
+}
+
 # FIX: Validación de 2/3 pings en lugar de un único ping
 # Retorna 0 (éxito) si hay internet, 1 si no hay
 internet_check() {
@@ -62,31 +121,37 @@ internet_check() {
     [ $fails -ge 2 ] && return 1 || return 0
 }
 
-send_telegram_notification() {
-    local message="$1"
+send_telegram() {
+    local chat_id="$1"
+    local message="$2"
     local sent=false
     local retries=0
     local max_retries=10
 
     while [ "$sent" = false ] && [ $retries -lt $max_retries ]; do
-        response=$(curl -s -X POST "https://api.telegram.org/bot$TELEGRAM_TOKEN/sendMessage" \
-            -d "chat_id=$CHAT_ID" \
+        response=$(curl -s -X POST "$TELEGRAM_API/sendMessage" \
+            -d "chat_id=$chat_id" \
             -d "parse_mode=Markdown" \
             -d "text=$message")
 
         if [[ "$response" == *"\"ok\":true"* ]]; then
-            log_message "Notificación enviada con éxito."
+            log_message "Notificación enviada a $chat_id."
             sent=true
         else
             retries=$((retries + 1))
-            log_message "Error al enviar notificación (intento $retries/$max_retries). Reintentando en 10 segundos..."
+            log_message "Error al enviar notificación a $chat_id (intento $retries/$max_retries). Reintentando en 10 segundos..."
             sleep 10
         fi
     done
 
     if [ "$sent" = false ]; then
-        log_message "No se pudo enviar la notificación tras $max_retries intentos. Se abandona."
+        log_message "No se pudo enviar la notificación a $chat_id tras $max_retries intentos. Se abandona."
     fi
+}
+
+send_telegram_notification() {
+    local message="$1"
+    send_telegram "$CHAT_ID" "$message"
 }
 
 # --- BUCLE PRINCIPAL ---
@@ -190,6 +255,9 @@ while true; do
             ALERT_PENDING=true
         fi
     fi
+
+    # Polling de comandos de Telegram (no bloqueante, timeout 2s)
+    telegram_polling
 
     sleep 60
 done
